@@ -7,7 +7,9 @@
 # 2008-06-26
 #
 #  This Nagios plugin was created to check all Oracle Table Space status
-#
+# 
+# Changelog:
+# Apr/16/2012 by Leandro Lana: Support to tablespaces with autoextend enabled
 
 
 PROGNAME=`basename $0`
@@ -17,20 +19,12 @@ REVISION=`echo '$Revision: 1 $' | sed -e 's/[^0-9.]//g'`
 . $PROGPATH/utils.sh
 
 # set your Oracle environment here
-export ORACLE_BASE=/opt/oracle
-export ORACLE_HOME=$ORACLE_BASE/product/10.2.0
-export ORACLE_SID=desenv
-export ORACLE_TERM=xterm
-export PATH=/usr/sbin:$PATH
-export PATH=$ORACLE_HOME/bin:$PATH
-export LD_LIBRARY_PATH=$ORACLE_HOME/lib:/lib:/usr/lib
-export CLASSPATH=$ORACLE_HOME/JRE:$ORACLE_HOME/jlib:$ORACLE_HOME/rdbms/jlib
-export NLS_LANG=PORTUGUESE_BRAZIL.we8iso8859p1
+
 
 
 print_usage() {
   echo "Usage:"
-  echo "  $PROGNAME <ORACLE_SID> <USER> <PASS> <CRITICAL> <WARNING>"
+  echo "  $PROGNAME <USER> <PASS> <CRITICAL> <WARNING>"
   echo "  $PROGNAME --help"
   echo "  $PROGNAME --version"
 }
@@ -61,21 +55,47 @@ print_help() {
 }
 
 check_tablespace() {
-    if [ ${5} -lt ${6} ] ; then
-        echo "UNKNOWN - Warning level is more then Crit"
-        exit $STATE_UNKNOWN
-    fi
-    result=`sqlplus -s ${2}/${3}@${1} << EOF
-set pagesize 0
-set numf '9999999.99'
-select NVL(b.free,0.0),a.total,100 - trunc(NVL(b.free,0.0)/a.total * 1000) / 10 prc
-from (
-select tablespace_name,sum(bytes)/1024/1024 total
-from dba_data_files group by tablespace_name) A
-LEFT OUTER JOIN
-( select tablespace_name,sum(bytes)/1024/1024 free
-from dba_free_space group by tablespace_name) B
-ON a.tablespace_name=b.tablespace_name WHERE a.tablespace_name='${4}';
+    result=`sqlplus -s ${2}/${3} << EOF
+    set lines 160
+    set pages 0
+select t.tablespace_name "Tablespace", trunc(round(ar.usado, 0),0) "Usado", round(decode(NVL2(cresc.tablespace, 0, sign(ar.Expansivel)),1,
+                    (ar.livre + ar.expansivel), ar.livre), 0) "Livre", round(ar.alocado,0) "Alocado Mb",
+                   NVL2(cresc.limite, 'ILIMITADO', round(ar.expansivel, 2)) "Expansivel",
+                   round(decode(NVL2(cresc.tablespace, 0, sign(ar.Expansivel)), 1, ar.usado / (ar.total + ar.expansivel),
+                    (ar.usado / ar.total)) * 100, 0) "Usado %", round(decode(NVL2(cresc.tablespace, 0, sign(ar.Expansivel)), 1,
+                    (ar.livre + ar.expansivel) / (ar.total + ar.expansivel),
+                    (ar.livre / ar.total)) * 100, 0) "Livre %", round(decode(NVL2(cresc.tablespace, 0, sign(ar.Expansivel)), 1,
+                    (ar.total + ar.expansivel), ar.total), 2) "Total", t.Contents "Conteudo", t.Extent_Management "Tipo Ger."
+       from dba_tablespaces t, (select df.tablespace_name tablespace,
+               sum(nvl(df.user_bytes,0))/1024/1024 Alocado, (sum(df.bytes) - sum(NVL(df_fs.bytes, 0))) / 1024 / 1024 Usado,
+               sum(NVL(df_fs.bytes, 0)) / 1024 / 1024 Livre,
+               sum(decode(df.autoextensible, 'YES', decode(sign(df.maxbytes - df.bytes), 1, df.maxbytes - df.bytes, 0),
+                          0)) / 1024 / 1024 Expansivel, sum(df.bytes) / 1024 / 1024 Total
+       from dba_data_files df, (select tablespace_name, file_id, sum(bytes) bytes
+                  from dba_free_space group by tablespace_name, file_id) df_fs
+         where df.tablespace_name = df_fs.tablespace_name(+) and df.file_id = df_fs.file_id(+)
+         group by df.tablespace_name
+        union
+        select tf.tablespace_name tablespace, sum(nvl(tf.user_bytes,0))/1024/1024 Alocado,        
+               sum(tf_fs.bytes_used) / 1024 / 1024 Usado, sum(tf_fs.bytes_free) / 1024 / 1024 Livre,
+               sum(decode(tf.autoextensible, 'YES', decode(sign(tf.maxbytes - tf.bytes), 1, tf.maxbytes - tf.bytes, 0),
+                          0)) / 1024 / 1024 Expansivel, sum(tf.bytes) / 1024 / 1024 Total
+          from dba_temp_files tf, V\\$TEMP_SPACE_HEADER tf_fs
+         where tf.tablespace_name = tf_fs.tablespace_name and tf.file_id = tf_fs.file_id
+         group by tf.tablespace_name) ar, (select df.tablespace_name tablespace, 'ILIMITADO' limite
+          from dba_data_files df
+         where df.maxbytes / 1024 / 1024 / 1024 > 30
+           and df.autoextensible = 'YES'
+         group by df.tablespace_name
+        union
+        select tf.tablespace_name tablespace, 'ILIMITADO' limite
+          from dba_temp_files tf
+         where tf.maxbytes / 1024 / 1024 / 1024 > 30
+           and tf.autoextensible = 'YES'
+         group by tf.tablespace_name) cresc
+ where cresc.tablespace(+) = t.tablespace_name
+   and ar.tablespace(+) = t.tablespace_name
+   and t.tablespace_name='${4}';
 EOF`
 
 
@@ -85,10 +105,11 @@ EOF`
       exit $STATE_CRITICAL
     fi
 
-    ts_free=`echo "$result" | awk '/^[ 0-9\.\t ]+$/ {print int($1)}'`
-    ts_total=`echo "$result" | awk '/^[ 0-9\.\t ]+$/ {print int($2)}'`
-    ts_pct=`echo "$result" | awk '/^[ 0-9\.\t ]+$/ {print int($3)}'`
-    ts_pctx=`echo "$result" | awk '/^[ 0-9\.\t ]+$/ {print $3}'`
+       ts_free=`echo "$result" |awk '{print $8}'`
+       ts_total=`echo "$result" |awk '{print $7}'`
+       ts_pct=`echo "$result" |awk '{print $6}'`
+       ts_pctx=`echo "$result" |awk '{print $6}'`
+
     if [ "$ts_free" -eq 0 -a "$ts_total" -eq 0 -a "$ts_pct" -eq 0 ] ; then
         echo "No data returned by Oracle - tablespace $5 not found?"
         exit $STATE_UNKNOWN
@@ -156,7 +177,7 @@ if [ "$cmd" != "--db" ]; then
 fi
 
 
-result=`sqlplus -s ${2}/${3}@${1} << EOF
+result=`sqlplus -s ${2}/${3} << EOF
 set pagesize 0
 set feedback off
 select distinct tablespace_name from dba_data_files order by 1;
