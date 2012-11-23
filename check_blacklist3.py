@@ -10,7 +10,7 @@ import urllib2
 import sys
 
 # add proxy
-proxy_support = urllib2.ProxyHandler({"http" : "http://www-gw.ucs.br:3128"})
+proxy_support = urllib2.ProxyHandler({"http" : "http://proxy.domain.com:3128"})
 opener = urllib2.build_opener(proxy_support)
 urllib2.install_opener(opener)
 
