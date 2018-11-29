@@ -60,17 +60,21 @@ then
 
 	if [ ${MAX} -gt 0 ]; then
 		AUX=$(expr ${USED} \* 100 / ${MAX} )
+		
+                AUXW=$(expr ${WARNING} \* ${MAX} / 100 )
+                AUXC=$(expr ${CRITICAL} \* ${MAX} / 100 )
+                PERFDATA="|connections=${USED};${AUXW};${AUXC};0;${MAX}"
 
                 if [ ${AUX} -lt ${WARNING} ]; then
-                        echo "Conntrack Tables OK - ${USED}"
+                        echo "Conntrack Tables OK - ${USED} ${PERFDATA}"
                         exit $STATE_OK
                 else
                         if [ ${AUX} -ge ${CRITICAL} ]; then
-				echo "Conntrack Tables CRITICAL - ${USED}"
+				echo "Conntrack Tables CRITICAL - ${USED} ${PERFDATA}"
                                 exit $STATE_CRITICAL
                         else
                                 if [ ${AUX} -ge ${WARNING} ]; then
-					echo "Conntrack Tables WARNING - ${USED}"
+					echo "Conntrack Tables WARNING - ${USED} ${PERFDATA}"
                                         exit $STATE_WARNING
                                 fi
                         fi
