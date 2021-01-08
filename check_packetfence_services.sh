@@ -34,7 +34,7 @@ print_gpl() {
 
 /usr/local/pf/bin/pfcmd service pf status > /tmp/pfservices.log
 
-SERVICESOK=""
+SERVICESOK=0
 SERVICES_CRITICAL=""
 
 for SERVICE in packetfence-api-frontend.service packetfence-config.service packetfence-fingerbank-collector.service packetfence-haproxy-admin.service packetfence-haproxy-portal
@@ -44,7 +44,9 @@ anager.service packetfence-pfcron.service packetfence-pfdetect.service packetfen
 ter.service packetfence-pfipset.service packetfence-pfperl-api.service packetfence-pfpki.service packetfence-pfqueue.service packetfence-pfsso.service packetfence-pfstats.servi
 ce packetfence-radiusd-auth.service packetfence-radsniff.service packetfence-redis-cache.service packetfence-redis_queue.service packetfence-tc.service ; do
         STARTED=$(grep ^"${SERVICE}" /tmp/pfservices.log | grep started)
-        [ "${STARTED}" ] || {
+        [ "${STARTED}" ] && {
+                ((SERVICESOK=SERVICESOK+1))
+        } || {
                 SERVICES_CRITICAL=$(echo "${SERVICE} ${SERVICES_CRITICAL}")
         }
 done
@@ -53,6 +55,6 @@ done
         echo "CRITICAL - PacketFence service ${SERVICES_CRITICAL}"
         exit ${STATE_CRITICAL}
 } || {
-        echo "OK - PacketFence services"
+        echo "OK - PacketFence ${SERVICESOK} services"
         exit ${STATE_OK}
 }
